@@ -196,6 +196,7 @@ MIDIEvents.MIDI_2PARAMS_EVENTS = [
 
 // Create an event stream parser
 MIDIEvents.createParser = function midiEventsCreateParser(stream, startAt, strictMode) {
+	//console.log('midiEventsCreateParser');
 	// Private vars
 	// Common vars
 	var eventTypeByte;
@@ -251,7 +252,10 @@ MIDIEvents.createParser = function midiEventsCreateParser(stream, startAt, stric
 			pos: function () {
 				return '0x' + (this.buffer.byteOffset + this.position).toString(16);
 			},
-			end: function () {
+			offset: function() {
+				return this.buffer.byteOffset + this.position;
+			}
+			,end: function () {
 				return this.position === this.buffer.byteLength;
 			},
 		};
@@ -263,6 +267,7 @@ MIDIEvents.createParser = function midiEventsCreateParser(stream, startAt, stric
 			stream.readUint8();
 		}
 	}
+	//console.log('stream',stream);
 	// creating the parser object
 	return {
 		// Read the next event
@@ -277,6 +282,7 @@ MIDIEvents.createParser = function midiEventsCreateParser(stream, startAt, stric
 				index: stream.pos(),
 				// Read the delta time
 				delta: stream.readVarInt(),
+				offset:stream.offset()
 			};
 			// Read the eventTypeByte
 			eventTypeByte = stream.readUint8();
@@ -323,6 +329,7 @@ MIDIEvents.createParser = function midiEventsCreateParser(stream, startAt, stric
 							(stream.readUint8() << 8) +
 							stream.readUint8());
 						event.tempoBPM = 60000000 / event.tempo;
+						//console.log('tempo',event);
 						return event;
 					case MIDIEvents.EVENT_META_SMTPE_OFFSET:
 						if (strictMode && 5 !== event.length) {
@@ -547,6 +554,7 @@ MIDIEvents.writeToTrack = function midiEventsWriteToTrack(events, destination, s
 					destination[index++] = (events[i].tempo >> 16);
 					destination[index++] = (events[i].tempo >> 8) & 0xFF;
 					destination[index++] = events[i].tempo & 0xFF;
+					console.log(i,'EVENT_META_SET_TEMPO',events[i]);
 					break;
 				case MIDIEvents.EVENT_META_SMTPE_OFFSET:
 					if (strictMode && 23 < events[i].hour) {
@@ -993,7 +1001,9 @@ MIDIFile.prototype.startNote = function (event, song) {
 		pitch: event.param1,
 		duration: 0.0000001,
 		slides: []
+		,evt:event
 	});
+
 }
 MIDIFile.prototype.closeNote = function (event, song) {
 	var track = this.takeTrack(event.channel, song);
@@ -1064,8 +1074,9 @@ MIDIFile.prototype.parseSong = function () {
 		tracks: [],
 		beats: []
 	};
+
 	var events = this.getMidiEvents();
-	console.log(events);
+	console.log('events',events);
 	// To set the pitch-bend range, three to four consecutive EVENT_MIDI_CONTROLLER messages must have consistent contents.
 	var expectedPitchBendRangeMessageNumber = 1; // counts which pitch-bend range message can be expected next: number 1 (can be sent any time, except after pitch-bend range messages number 1 or 2), number 2 (required after number 1), number 3 (required after number 2), or number 4 (optional)
 	var expectedPitchBendRangeChannel = null;
@@ -1081,14 +1092,14 @@ MIDIFile.prototype.parseSong = function () {
 				if (events[i].param1 >= 35 && events[i].param1 <= 81) {
 					this.startDrum(events[i], song);
 				} else {
-					console.log('wrong drum', events[i]);
+					//console.log('wrong drum', events[i]);
 				}
 			} else {
 				if (events[i].param1 >= 0 && events[i].param1 <= 127) {
 					//console.log('start', events[i].param1);
 					this.startNote(events[i], song);
 				} else {
-					console.log('wrong tone', events[i]);
+					//console.log('wrong tone', events[i]);
 				}
 			}
 		} else {
@@ -1181,7 +1192,9 @@ MIDIFile.prototype.getEvents = function (type, subtype) {
 		for (i = 0, j = this.tracks.length; i < j; i++) {
 			// reset playtime if format is 2
 			playTime = (2 === format && playTime ? playTime : 0);
+			
 			events = MIDIEvents.createParser(this.tracks[i].getTrackContent(), 0, false);
+			console.log('createParser A',i,events);
 			// loooping through events
 			event = events.next();
 			while (event) {
@@ -1189,7 +1202,9 @@ MIDIFile.prototype.getEvents = function (type, subtype) {
 				if (event.type === MIDIEvents.EVENT_META) {
 					// tempo change events
 					if (event.subtype === MIDIEvents.EVENT_META_SET_TEMPO) {
+						
 						tickResolution = this.header.getTickResolution(event.tempo);
+						console.log(playTime,i,'? tickResolution',tickResolution,event);
 					}
 				}
 				// push the asked events
@@ -1205,13 +1220,15 @@ MIDIFile.prototype.getEvents = function (type, subtype) {
 	} else {
 		trackParsers = [];
 		smallestDelta = -1;
-
+		//var cache=[];
 		// Creating parsers
 		for (i = 0, j = this.tracks.length; i < j; i++) {
 			trackParsers[i] = {};
-			trackParsers[i].parser = MIDIEvents.createParser(
-					this.tracks[i].getTrackContent(), 0, false);
+			trackParsers[i].parser = MIDIEvents.createParser( this.tracks[i].getTrackContent(), 0, false);
 			trackParsers[i].curEvent = trackParsers[i].parser.next();
+			console.log('createParser B',i);
+			//cache[i]=[];
+			//cache[i].push(trackParsers[i].curEvent);
 		}
 		// Filling events
 		do {
@@ -1219,8 +1236,7 @@ MIDIFile.prototype.getEvents = function (type, subtype) {
 			// finding the smallest event
 			for (i = 0, j = trackParsers.length; i < j; i++) {
 				if (trackParsers[i].curEvent) {
-					if (-1 === smallestDelta || trackParsers[i].curEvent.delta <
-						trackParsers[smallestDelta].curEvent.delta) {
+					if (-1 === smallestDelta || trackParsers[i].curEvent.delta < trackParsers[smallestDelta].curEvent.delta) {
 						smallestDelta = i;
 					}
 				}
@@ -1229,29 +1245,40 @@ MIDIFile.prototype.getEvents = function (type, subtype) {
 				// removing the delta of previous events
 				for (i = 0, j = trackParsers.length; i < j; i++) {
 					if (i !== smallestDelta && trackParsers[i].curEvent) {
-						trackParsers[i].curEvent.delta -= trackParsers[smallestDelta].curEvent.delta;
+						//trackParsers[i].curEvent.delta -= trackParsers[smallestDelta].curEvent.delta;
+						trackParsers[i].curEvent.delta = trackParsers[i].curEvent.delta - trackParsers[smallestDelta].curEvent.delta;
 					}
 				}
 				// filling values
 				event = trackParsers[smallestDelta].curEvent;
-				playTime += (event.delta ? (event.delta * tickResolution) / 1000 : 0);
+				//playTime += (event.delta ? (event.delta * tickResolution) / 1000 : 0);
+				if(event.delta){
+					playTime=playTime+(event.delta * tickResolution) / 1000;
+				}else{
+//
+				}
+				//console.log(playTime);
 				if (event.type === MIDIEvents.EVENT_META) {
 					// tempo change events
 					if (event.subtype === MIDIEvents.EVENT_META_SET_TEMPO) {
 						tickResolution = this.header.getTickResolution(event.tempo);
+						console.log(playTime,'11 tickResolution',tickResolution,'bpm',event.tempoBPM);
 					}
 				}
 				// push midi events
 				if (((!type) || event.type === type) &&
 					((!subtype) || (event.subtype && event.subtype === subtype))) {
 					event.playTime = playTime;
+					console.log(playTime,event);
 					event.track = smallestDelta;
 					filteredEvents.push(event);
 				}
 				// getting next event
 				trackParsers[smallestDelta].curEvent = trackParsers[smallestDelta].parser.next();
+				//cache[smallestDelta].push(trackParsers[smallestDelta].curEvent);
 			}
 		} while (-1 !== smallestDelta);
+		//console.log(cache);
 	}
 	return filteredEvents;
 };
